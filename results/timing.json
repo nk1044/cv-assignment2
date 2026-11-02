@@ -1,0 +1,10 @@
+{
+ "T_CPU_ms": 3.6676013150029965,
+ "S_disk_bytes": 337026,
+ "set": "te",
+ "n": 5019,
+ "cpu": "Apple M3",
+ "os": "macOS-27.0.1-arm64-arm-64bit",
+ "torch_threads": 1,
+ "torch": "2.15.0"
+}

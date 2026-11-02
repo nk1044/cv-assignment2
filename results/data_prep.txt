@@ -1,0 +1,3 @@
+te: 5019 photos cached
+split: 9498 train / 1055 val (seed 0); test 5019
+then: python -m src.convert_reference --reference-split -> 9500 train / 1053 val (seed 2024), the split the reference weights were trained with

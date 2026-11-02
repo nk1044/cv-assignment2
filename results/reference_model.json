@@ -1,0 +1,22 @@
+{
+ "source": "/Users/neerajkumar/Downloads/cv-assignment2/sample-code/weights/model.pt",
+ "out": "/Users/neerajkumar/Downloads/cv-assignment2/weights/model.pt",
+ "config": {
+  "widths": [
+   48,
+   64,
+   128,
+   192
+  ],
+  "depths": [
+   2,
+   3,
+   4
+  ],
+  "in_res": 128,
+  "out_size": 256
+ },
+ "params": 299489,
+ "S_disk_bytes": 337026,
+ "storage": "int8 conv weights + per-channel scales, float16 biases"
+}

@@ -1,0 +1,5 @@
+Downscale $256\to128$ (\texttt{cv2.INTER\_AREA}) & 0.004 \\
+uint8 array $\to$ float tensor & 0.015 \\
+Network (TorchScript, frozen) & 3.619 \\
+Upsample logit $64\to256$, threshold & 0.036 \\
+\midrule Total & 3.673 \\

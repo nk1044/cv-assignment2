@@ -122,6 +122,24 @@ It must print exactly two lines: `T CPU ms: ...` and `S disk bytes: ...`.
 
 ---
 
+## Interim route: reference weights (no training), report in LaTeX
+Use this until your own model is trained. It runs the sample code's trained weights through **this project's** pipeline. The report labels them clearly as reference weights.
+```bash
+python -m src.data                                   # cache DUTS (step 1)
+python -m src.convert_reference --reference-split    # -> weights/model.pt, results/reference_model.json,
+                                                     #    and the split those weights were trained with
+python -m src.bench && python -m src.bench --flip-tta
+python -m src.profile_stages                         # -> results/profile_stages.json
+python -m src.tune_deployed --apply                  # threshold + flip TTA on val -> results/tuning_model.json
+python -m src.time_cpu | tee results/time_cpu_te.txt # official T_CPU, all 5,019 DUTS-TE photos
+python -m src.evaluate --sets val te captured        # -> results/metrics.json, final_table.md
+python -m src.figures worst --set te && python -m src.figures worst --set val
+python -m src.figures captured                       # once your photos and masks exist
+python report/make_assets.py                         # -> report/generated/*.tex, report/figures/*.png
+cd report && tectonic report.tex                     # -> report/report.pdf (brew install tectonic)
+```
+When your own model is trained, run steps 4–8 above (export to `weights/model.pt`), then the last five commands of this list. After that, update the provenance box and the training section in `report/report.tex`.
+
 ## What goes where in the report
 | Report item | Source |
 |---|---|

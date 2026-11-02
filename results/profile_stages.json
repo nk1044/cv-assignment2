@@ -1,0 +1,18 @@
+{
+ "weights": "/Users/neerajkumar/Downloads/cv-assignment2/weights/model.pt",
+ "n": 300,
+ "cpu": "Apple M3",
+ "os": "macOS-27.0.1-arm64-arm-64bit",
+ "torch": "2.15.0",
+ "threads": 1,
+ "layout_ms": {
+  "contiguous": 3.6325033333333323,
+  "channels_last": 43.34368000000002
+ },
+ "stage_ms": {
+  "downscale": 0.0036833333333478415,
+  "to_tensor": 0.01479666666647598,
+  "network": 3.6187900000001605,
+  "upsample_threshold": 0.03621666666656864
+ }
+}

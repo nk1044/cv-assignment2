@@ -1,0 +1,5 @@
+val       n= 1053  mIoU 0.8828  BF1 0.6922  Q 0.8256
+te        n= 5019  mIoU 0.7357  BF1 0.5182  Q 0.6705
+captured: no photos found, skipped
+T_CPU 3.67 ms (Apple M3), S_disk 337,026 B, CES 0.6553
+wrote /Users/neerajkumar/Downloads/cv-assignment2/results/final_table.md

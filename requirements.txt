@@ -1,0 +1,5 @@
+# Only these libraries are allowed by the assignment (Section 2a).
+torch>=2.3
+numpy
+opencv-python
+matplotlib

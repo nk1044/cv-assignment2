@@ -32,7 +32,7 @@ def image_scores(pred, gt):
 def run_set(seg, images, masks, names):
     meter, rows, preds = SegMeter(), [], []
     for img, gt, name in zip(images, masks, names):
-        pred, gt = seg(np.array(img)), np.asarray(gt)
+        pred, gt = seg(np.array(img)), np.array(gt)
         meter.update(pred, gt)
         rows.append({"name": name, **image_scores(pred, gt)})
         preds.append(pred)

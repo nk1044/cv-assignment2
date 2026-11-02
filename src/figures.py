@@ -15,9 +15,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import torch  # noqa: E402
 
 from src.captured import load_captured  # noqa: E402
 from src.config import FIGURES, RESULTS, WEIGHTS_FILE  # noqa: E402
+from src.metrics import boundary  # noqa: E402
 
 TRUE_RGB = np.array([0, 200, 0])     # green
 PRED_RGB = np.array([230, 40, 200])  # magenta
@@ -29,10 +31,8 @@ def overlay(bgr, mask, rgb):
     out = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
     m = mask.astype(bool)
     out[m] = (1 - ALPHA) * out[m] + ALPHA * rgb
-    out = out.astype(np.uint8)
-    contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    cv2.drawContours(out, contours, -1, tuple(int(c) for c in rgb), 1)  # drawing only, not used for scores
-    return out
+    out[boundary(torch.from_numpy(m)[None])[0].numpy()] = rgb
+    return out.astype(np.uint8)
 
 
 def side_by_side(rows, path, title):

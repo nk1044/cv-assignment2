@@ -1,5 +1,7 @@
 # CSL7360 Assignment 2: Cost-Efficient Segmentation, Plan
 
+> **Update (2026-11-02):** the sample code has been removed and replaced by a fresh codebase (see [README.md](README.md)). Sections 0–3 below describe the sample as it was and are kept for reference. File names have changed: `prepare_data` is now `src.data`, `TinyUNet` is now `SegNet`, `bench_arch` is now `src.bench`, `make_figures` is now `src.figures`, and `prepare_captured` is now `src.captured`. The Mac fixes from section 2 are already done: device-agnostic training, macOS CPU name, a HEIC warning, and the threshold and flip-TTA settings stored in the parameter file.
+
 Goal: a pipeline that labels every pixel of a 256×256 photo as **object** or **background**, running on **one CPU thread** in **at most 50 ms on average** per photo, with the **CES score on DUTS-TE as high as possible**.
 
 ```

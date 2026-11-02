@@ -15,8 +15,6 @@ import argparse
 
 import cv2
 import numpy as np
-import torch
-from torch.utils.data import Dataset
 
 from src.config import CACHE, DUTS, MASK_THRESHOLD, SIZE, SPLIT_SEED, VAL_FRACTION
 
@@ -80,21 +78,6 @@ def load_set(prefix):
 def load_split():
     split = np.load(CACHE / "split.npz")
     return split["train"], split["val"]
-
-
-class SegDataset(Dataset):
-    """uint8 tensors (3,256,256) BGR and (256,256) {0,1}; augmentation happens on the device."""
-
-    def __init__(self, images, masks, indices):
-        self.images, self.masks, self.indices = images, masks, indices
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, i):
-        j = self.indices[i]
-        img = torch.from_numpy(np.array(self.images[j])).permute(2, 0, 1)
-        return img, torch.from_numpy(np.array(self.masks[j]))
 
 
 def main():

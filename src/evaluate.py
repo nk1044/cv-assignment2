@@ -4,7 +4,8 @@ combine it with results/timing.json into the final results table.
     python -m src.evaluate [--weights weights/model.pt] [--sets val te captured]
 
 Run DUTS-TE ("te") only once, for the final model. Writes results/metrics.json,
-results/per_image_<set>.json and results/captured_pred/<name>.png.
+results/per_image_<set>.json, results/captured_pred/<name>.png and, once DUTS-TE and
+results/timing.json exist, the report table results/final_table.md.
 """
 import src.threads  # noqa: F401
 
@@ -81,7 +82,22 @@ def main():
         results["S_disk_bytes"] = s_disk
         results["CES"] = ces(results["te"]["Q"], timing["T_CPU_ms"], s_disk)
         print(f"T_CPU {timing['T_CPU_ms']:.2f} ms ({timing['cpu']}), S_disk {s_disk:,} B, CES {results['CES']:.4f}")
+        write_final_table(results)
     out_path.write_text(json.dumps(results, indent=1))
+
+
+def write_final_table(r):
+    t = r["timing"]
+    lines = ["| Set | n | mIoU | Boundary F1 | Q |", "|---|---|---|---|---|"]
+    for key, label in (("val", "Validation (DUTS-TR split)"), ("te", "DUTS-TE"), ("captured", "Own photos")):
+        if key in r:
+            s = r[key]
+            lines.append(f"| {label} | {s['n']} | {s['mIoU']:.4f} | {s['BF1']:.4f} | {s['Q']:.4f} |")
+    lines += ["", "| T_CPU (ms) | S_disk (bytes) | CES (on DUTS-TE) |", "|---|---|---|",
+              f"| {t['T_CPU_ms']:.2f} | {r['S_disk_bytes']:,} | **{r['CES']:.4f}** |", "",
+              f"CPU: {t['cpu']}, 1 thread, {t['os']}, torch {t['torch']}, T_CPU over {t['n']} DUTS-TE photos."]
+    (RESULTS / "final_table.md").write_text("\n".join(lines) + "\n")
+    print(f"wrote {RESULTS / 'final_table.md'}")
 
 
 if __name__ == "__main__":

@@ -1,19 +1,22 @@
-"""Turn a training checkpoint into the deployed parameter file weights/model.pt.
+"""Turn a training checkpoint into a deployed parameter file.
 
-    python -m src.export --ckpt checkpoints/base.pt [--tune] [--flip-tta] [--fp16]
+    python -m src.export --ckpt checkpoints/base.pt [--out weights/model.pt] [--tune] [--flip-tta] [--fp16]
 
 1. folds BatchNorm and the 1/255 input scale into the convs;
 2. with --tune, picks the logit threshold that maximises validation Q (never DUTS-TE);
-3. stores weights as int8 + per-channel scales (default) or float16, with the threshold;
+3. stores weights as int8 + per-channel scales (default) or float16, plus the threshold;
 4. checks the deployed CPU pipeline against the original float32 model on validation photos.
+Writes results/export_<out name>.json (threshold sweep, agreement, file size) for the report.
 """
 import argparse
+import json
 import os
+from pathlib import Path
 
 import numpy as np
 import torch
 
-from src.config import WEIGHTS_FILE
+from src.config import RESULTS, WEIGHTS_FILE
 from src.data import load_set, load_split
 from src.metrics import SegMeter
 from src.model import SegNet, fuse_for_inference
@@ -30,24 +33,67 @@ def load_checkpoint(path):
     return model.eval(), ckpt
 
 
-def val_logits(seg, limit=0):
+def val_logits(seg):
+    """Deployed-pipeline logits on every validation photo: (N,256,256) float32 tensor + masks."""
     images, masks, _ = load_set("tr")
     _, val = load_split()
-    val = val[:limit] if limit else val
-    return [seg.logits(np.array(images[i])) for i in val], [np.array(masks[i]) for i in val]
+    logits = torch.from_numpy(np.stack([seg.logits(np.array(images[i])) for i in val]))
+    return logits, torch.from_numpy(np.array(masks[val])).bool()
 
 
-def tune_threshold(logits, masks):
-    best = None
-    for t in THRESHOLDS:
+def sweep(logits, masks, thresholds=THRESHOLDS, chunk=128):
+    rows = []
+    for t in thresholds:
         meter = SegMeter()
-        for lg, gt in zip(logits, masks):
-            meter.update(lg > t, gt)
-        s = meter.summary()
-        print(f"  threshold {t:+.1f}: mIoU {s['mIoU']:.4f} BF1 {s['BF1']:.4f} Q {s['Q']:.4f}")
-        if best is None or s["Q"] > best[1]["Q"]:
-            best = (float(t), s)
-    return best
+        for s in range(0, len(logits), chunk):
+            meter.update(logits[s:s + chunk] > t, masks[s:s + chunk])
+        rows.append({"threshold": float(t), **meter.summary()})
+    return rows
+
+
+def agreement(seg, reference, threshold, n=50):
+    images, _, _ = load_set("tr")
+    _, val = load_split()
+    agree = []
+    with torch.no_grad():
+        for i in val[:n]:
+            img = np.array(images[i])
+            x = torch.from_numpy(img).permute(2, 0, 1)[None].float() / 255.0
+            x = torch.nn.functional.interpolate(x, size=(seg.res, seg.res), mode="area")
+            agree.append((seg(img) == (reference(x)[0, 0] > threshold).numpy()).mean())
+    return float(np.mean(agree))
+
+
+def export(ckpt_path, out, fp16=False, flip_tta=False, tune=False, threshold=0.0, verbose=True):
+    model, ckpt = load_checkpoint(ckpt_path)
+    reference, _ = load_checkpoint(ckpt_path)
+    fused = fuse_for_inference(model)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+
+    def save(t):
+        save_params(out, ckpt["config"], fused.state_dict(), t, flip_tta, int8=not fp16)
+
+    save(0.0)
+    rows = sweep(*val_logits(Segmenter(out)), thresholds=THRESHOLDS if tune else [threshold])
+    best = max(rows, key=lambda r: r["Q"])
+    if verbose and tune:
+        for r in rows:
+            print(f"  threshold {r['threshold']:+.1f}: mIoU {r['mIoU']:.4f} BF1 {r['BF1']:.4f} Q {r['Q']:.4f}")
+    save(best["threshold"])
+
+    info = {"ckpt": str(ckpt_path), "out": str(out), "config": ckpt["config"], "train_args": ckpt.get("args"),
+            "epoch": ckpt["epoch"], "ckpt_val": ckpt["val"], "storage": "float16" if fp16 else "int8",
+            "flip_tta": flip_tta, "threshold": best["threshold"], "val": {k: best[k] for k in ("mIoU", "BF1", "Q", "n")},
+            "S_disk_bytes": os.path.getsize(out), "agreement_vs_fp32": None if flip_tta else
+            agreement(Segmenter(out), reference, best["threshold"]), "sweep": rows}
+    RESULTS.mkdir(exist_ok=True)
+    (RESULTS / f"export_{Path(out).stem}.json").write_text(json.dumps(info, indent=1))
+    if verbose:
+        print(f"saved {out}: {info['S_disk_bytes']:,} bytes, {info['storage']}, threshold {best['threshold']:+.1f}, "
+              f"flip_tta {flip_tta}, val Q {best['Q']:.4f} (checkpoint epoch {ckpt['epoch']})")
+        if info["agreement_vs_fp32"] is not None:
+            print(f"pixel agreement deployed vs float32 on 50 val photos: {info['agreement_vs_fp32']:.5f}")
+    return info
 
 
 def main():
@@ -59,41 +105,7 @@ def main():
     p.add_argument("--tune", action="store_true", help="tune the logit threshold on validation")
     p.add_argument("--threshold", type=float, default=0.0)
     args = p.parse_args()
-
-    model, ckpt = load_checkpoint(args.ckpt)
-    reference = SegNet(**ckpt["config"])
-    reference.load_state_dict(ckpt["state"])
-    reference.eval()
-    fused = fuse_for_inference(model)
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-
-    def save(threshold):
-        save_params(args.out, ckpt["config"], fused.state_dict(), threshold, args.flip_tta, int8=not args.fp16)
-
-    threshold = args.threshold
-    if args.tune:
-        save(0.0)
-        print("tuning the threshold on validation:")
-        threshold, s = tune_threshold(*val_logits(Segmenter(args.out)))
-        print(f"best threshold {threshold:+.1f} (val Q {s['Q']:.4f})")
-    save(threshold)
-
-    # sanity check: deployed pipeline (fused, quantised, cv2 upsampling) vs float32 model
-    seg = Segmenter(args.out)
-    images, _, _ = load_set("tr")
-    _, val = load_split()
-    agree = []
-    with torch.no_grad():
-        for i in val[:50]:
-            img = np.array(images[i])
-            x = torch.from_numpy(img).permute(2, 0, 1)[None].float() / 255.0
-            x = torch.nn.functional.interpolate(x, size=(seg.res, seg.res), mode="area")
-            ref = (reference(x)[0, 0] > threshold).numpy()
-            agree.append((seg(img) == ref).mean())
-    print(f"saved {args.out}: {os.path.getsize(args.out):,} bytes, threshold {threshold:+.2f}, "
-          f"flip_tta {args.flip_tta} (checkpoint epoch {ckpt['epoch']}, val Q {ckpt['val']['Q']:.4f})")
-    print(f"pixel agreement deployed vs float32 on 50 val photos: {np.mean(agree):.5f}"
-          + ("" if not args.flip_tta else " (reference has no TTA)"))
+    export(args.ckpt, args.out, args.fp16, args.flip_tta, args.tune, args.threshold)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ to decide which ones are worth training. Not the official T_CPU (see src.time_cp
     python -m src.bench                     # every candidate below
     python -m src.bench r128_w32 r160_w32   # selected ones
     python -m src.bench --flip-tta          # include mirrored-photo averaging
+The table is also written to results/bench[_tta].md.
 """
 import src.threads  # noqa: F401
 
@@ -14,6 +15,7 @@ import time
 
 import numpy as np
 
+from src.config import RESULTS
 from src.model import SegNet, count_params, fuse_for_inference
 from src.pipeline import Segmenter
 from src.weights_io import save_params
@@ -50,10 +52,18 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--flip-tta", action="store_true")
     args = p.parse_args()
-    print(f"{'candidate':14s} {'params':>9s} {'bytes':>9s} {'ms':>7s}")
+    lines = ["| candidate | widths | depths | in_res | params | bytes (int8) | ms |", "|---|---|---|---|---|---|---|"]
+    print(lines[0])
     for name in args.names or CANDIDATES:
-        ms, size, params = bench(CANDIDATES[name], args.flip_tta)
-        print(f"{name:14s} {params:9,d} {size:9,d} {ms:7.2f}", flush=True)
+        c = CANDIDATES[name]
+        ms, size, params = bench(c, args.flip_tta)
+        lines.append(f"| {name} | {list(c['widths'])} | {list(c['depths'])} | {c['in_res']} | {params:,} | {size:,} | {ms:.2f} |")
+        print(lines[-1], flush=True)
+    RESULTS.mkdir(exist_ok=True)
+    out = RESULTS / f"bench{'_tta' if args.flip_tta else ''}.md"
+    out.write_text(f"Single-thread CPU time per photo, random weights{' with flip TTA' if args.flip_tta else ''}\n\n"
+                   + "\n".join(lines) + "\n")
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":

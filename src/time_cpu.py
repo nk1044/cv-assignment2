@@ -6,7 +6,8 @@ Each photo is a 256x256 array in memory before its timer starts; the timer stops
     python -m src.time_cpu [--weights weights/model.pt] [--limit N] [--set val]
 
 --set val times validation photos instead, for comparing candidate models without
-touching DUTS-TE. Only the full DUTS-TE run writes results/timing.json.
+touching DUTS-TE (written to results/timing_val_<weights name>.json). Only the full
+DUTS-TE run writes results/timing.json, the official number.
 """
 import src.threads  # noqa: F401  (must come before NumPy/OpenCV/PyTorch)
 
@@ -16,6 +17,7 @@ import os
 import platform
 import subprocess
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -76,9 +78,11 @@ def main():
             "cpu": cpu_name(), "os": platform.platform(), "torch_threads": torch.get_num_threads(),
             "torch": torch.__version__}
     print(json.dumps(info, indent=1))
+    RESULTS.mkdir(exist_ok=True)
     if args.set == "te" and not args.limit:
-        RESULTS.mkdir(exist_ok=True)
         (RESULTS / "timing.json").write_text(json.dumps(info, indent=1))
+    elif args.set == "val":
+        (RESULTS / f"timing_val_{Path(args.weights).stem}.json").write_text(json.dumps(info, indent=1))
 
 
 if __name__ == "__main__":

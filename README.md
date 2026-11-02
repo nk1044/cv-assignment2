@@ -32,7 +32,7 @@ S disk bytes: 425767
 ```
 
 ## Workflow
-Run every command from the project root.
+Run every command from the project root. **[commands.md](commands.md) has the exact Mac-only run (training on MPS), with every command and where each result goes in the report.**
 
 | Step | Command | Notes |
 |---|---|---|
@@ -41,7 +41,7 @@ Run every command from the project root.
 | 3. Compare architecture speed | `python -m src.bench [names] [--flip-tta]` | Uses random weights and one thread. Edit `CANDIDATES` in [src/bench.py](src/bench.py) to add more. |
 | 4. Train (GPU/MPS/CPU) | `python -m src.train --name base --in-res 128 --widths 32 48 96 128 --depths 2 3 4 --epochs 80` | Keeps the best epoch by **val** Q in `checkpoints/base.pt`. Add `--ema 0.999` and tune `--boundary-weight`. |
 | 5. Export parameters | `python -m src.export --ckpt checkpoints/base.pt --tune [--flip-tta] [--fp16]` | Folds BN, tunes the threshold on val, and writes int8 weights to `weights/model.pt`. |
-| 6. Time on val (model selection) | `python -m src.time_cpu --set val` | Compares candidates without touching DUTS-TE. |
+| 6. Compare candidates | `python -m src.compare checkpoints/*.pt` | Exports each checkpoint, tunes the threshold, times it on val and ranks by **val CES** in `results/experiments.md`, with and without flip TTA. |
 | 7. Prepare captured photos | `python -m src.captured prepare`, then `python -m src.annotate`, then `python -m src.captured check` | See below. |
 | 8. Evaluate val and captured | `python -m src.evaluate` | |
 | 9. **Final run only:** official T_CPU | `python -m src.time_cpu` | All 5,019 DUTS-TE photos, written to `results/timing.json`. |
@@ -50,8 +50,8 @@ Run every command from the project root.
 
 DUTS-TE is read only by steps 9–10 and by `src.figures worst --set te`. Never use it to pick a model, threshold or epoch.
 
-### Training on Colab or Kaggle
-Upload the repo and `data/cache/` (built by step 1, about 3 GB). Run step 4 there with `--device cuda --workers 4`, then download `checkpoints/<name>.pt` and run steps 5 onward **on the laptop**, since timing must come from your own CPU. Use the same torch version in both places.
+### Training
+Training runs on the Mac GPU (Apple MPS) by default, at about 40 s per epoch on an M3 for the 128 px models. The train and val photos are loaded into RAM (about 2.5 GB). `--device cuda` also works on a CUDA machine, but timing must always be measured on your own laptop's CPU.
 
 ## Captured photos
 1. Put 5 to 10 of your own phone photos in `captured/original/` as JPEG, using base names such as `bottle.jpg`. Convert iPhone HEIC files with `sips -s format jpeg x.heic --out x.jpg`.
@@ -70,6 +70,7 @@ src/weights_io.py        parameter file format (int8 / float16, plain torch.save
 src/pipeline.py          the timed CPU pipeline (Segmenter)
 src/train.py             training with augmentation, BCE + soft Dice
 src/export.py            checkpoint -> weights/model.pt, threshold tuning on val
+src/compare.py           model selection by validation CES -> results/experiments.md
 src/metrics.py           mIoU, Boundary F1, Q, CES (from scratch)
 src/time_cpu.py          official T_CPU          src/evaluate.py   results table
 src/bench.py             architecture speed      src/figures.py    report figures
@@ -77,7 +78,7 @@ src/captured.py          captured photo prep and checks
 src/annotate.py          polygon mask annotator
 tests/test_metrics.py    metric correctness against brute force
 captured/{original,images_256,masks_256}/
-results/                 metrics.json, timing.json, per-image scores, training logs
+results/                 experiments, bench, training logs, metrics.json, timing.json, final_table.md
 report/                  report and figures
 ```
 

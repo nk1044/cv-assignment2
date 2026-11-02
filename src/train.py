@@ -3,23 +3,27 @@ validation Q. DUTS-TE is never read here.
 
     python -m src.train --name base --in-res 128 --widths 32 48 96 128 --depths 2 3 4 --epochs 80
 
-Runs on CUDA (Colab/Kaggle), Apple MPS or CPU (--device, default: best available).
+Runs on Apple MPS (the Mac GPU), CUDA or CPU (--device, default: best available). The
+train and val photos are loaded into RAM (about 2.5 GB) and batched by a background thread.
 Augmentation (flip, affine zoom/rotate/shift, colour and lighting jitter, blur, noise) runs
 on the device. Loss: pixel-wise BCE, optionally up-weighted near the true outline, + soft Dice.
-Writes checkpoints/<name>.pt and results/train_<name>.json.
+Writes checkpoints/<name>.pt, results/train_<name>.json (per-epoch history) and
+results/logs/train_<name>.log (console output).
 """
 import argparse
 import copy
 import json
 import math
+import queue
+import threading
 import time
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 
 from src.config import CHECKPOINTS, RESULTS
-from src.data import SegDataset, load_set, load_split
+from src.data import load_set, load_split
 from src.metrics import SegMeter, boundary, within_window
 from src.model import SegNet, count_params
 
@@ -32,6 +36,33 @@ def pick_device(name):
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+class Batches:
+    """Shuffled uint8 batches from in-memory arrays, prepared one step ahead in a thread."""
+
+    def __init__(self, images, masks, batch_size, shuffle, seed=0, drop_last=False):
+        self.images, self.masks, self.batch_size = images, masks, batch_size
+        self.shuffle, self.drop_last = shuffle, drop_last
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self):
+        n = len(self.images)
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
+
+    def __iter__(self):
+        order = self.rng.permutation(len(self.images)) if self.shuffle else np.arange(len(self.images))
+        q = queue.Queue(maxsize=4)
+
+        def work():
+            for s in range(len(self)):
+                idx = np.sort(order[s * self.batch_size:(s + 1) * self.batch_size])
+                q.put((torch.from_numpy(self.images[idx]).permute(0, 3, 1, 2), torch.from_numpy(self.masks[idx])))
+            q.put(None)
+
+        threading.Thread(target=work, daemon=True).start()
+        while (item := q.get()) is not None:
+            yield item
 
 
 def to_float(img_u8, mask_u8, device):
@@ -109,7 +140,7 @@ def main():
     p.add_argument("--dice-weight", type=float, default=1.0)
     p.add_argument("--ema", type=float, default=0.0, help="EMA decay of the weights, e.g. 0.999 (0 = off)")
     p.add_argument("--device", default="auto")
-    p.add_argument("--workers", type=int, default=2)
+    p.add_argument("--amp", action="store_true", help="float16 autocast (always on for CUDA)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-train", type=int, default=0, help="debug: use only this many training photos")
     args = p.parse_args()
@@ -117,6 +148,7 @@ def main():
     torch.manual_seed(args.seed)
     device = pick_device(args.device)
     cuda = device.type == "cuda"
+    amp = cuda or (args.amp and device.type == "mps")
     if cuda:
         torch.backends.cudnn.benchmark = True
 
@@ -124,14 +156,13 @@ def main():
     train_idx, val_idx = load_split()
     if args.max_train:
         train_idx = train_idx[:args.max_train]
-    train_loader = DataLoader(SegDataset(images, masks, train_idx), args.batch_size, shuffle=True,
-                              drop_last=True, num_workers=args.workers, pin_memory=cuda,
-                              persistent_workers=args.workers > 0)
-    val_loader = DataLoader(SegDataset(images, masks, val_idx), 64, num_workers=args.workers, pin_memory=cuda)
+    t0 = time.time()
+    train_loader = Batches(images[train_idx], masks[train_idx], args.batch_size, True, args.seed, drop_last=True)
+    val_loader = Batches(images[val_idx], masks[val_idx], 64, False)
+    print(f"loaded {len(train_idx)} train / {len(val_idx)} val photos into memory ({time.time() - t0:.0f}s)")
 
     model = SegNet(args.widths, args.depths, in_res=args.in_res).to(device)
     ema = copy.deepcopy(model).eval() if args.ema else None
-    print(f"{args.name}: {count_params(model):,} params, train {len(train_idx)}, val {len(val_idx)}, {device}")
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     steps, warmup = args.epochs * len(train_loader), len(train_loader)
@@ -140,14 +171,23 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=cuda)
 
     CHECKPOINTS.mkdir(exist_ok=True)
-    RESULTS.mkdir(exist_ok=True)
+    (RESULTS / "logs").mkdir(parents=True, exist_ok=True)
+    log_file = open(RESULTS / "logs" / f"train_{args.name}.log", "w")
+
+    def log(msg):
+        print(msg, flush=True)
+        log_file.write(msg + "\n")
+        log_file.flush()
+
+    log(f"{args.name}: {count_params(model):,} params, train {len(train_idx)}, val {len(val_idx)}, {device}")
+    log(f"args: {json.dumps(vars(args))}")
     history, best_q = [], -1.0
     for epoch in range(1, args.epochs + 1):
         model.train()
         t0, running = time.time(), 0.0
         for img_u8, mask_u8 in train_loader:
             x, m = augment(*to_float(img_u8, mask_u8, device))
-            with torch.autocast("cuda", dtype=torch.float16, enabled=cuda):
+            with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
                 logit = model(downscale(x, args.in_res))
             loss = loss_fn(logit.float(), m, args.boundary_weight, args.dice_weight)
             opt.zero_grad(set_to_none=True)
@@ -173,10 +213,10 @@ def main():
             best_q, mark = val["Q"], " *"
             torch.save({"config": scored.config, "state": scored.state_dict(), "epoch": epoch, "val": val,
                         "args": vars(args)}, CHECKPOINTS / f"{args.name}.pt")
-        print(f"ep {epoch:3d} loss {row['loss']:.4f} val mIoU {val['mIoU']:.4f} BF1 {val['BF1']:.4f} "
-              f"Q {val['Q']:.4f} ({row['sec']:.0f}s){mark}", flush=True)
+        log(f"ep {epoch:3d} loss {row['loss']:.4f} val mIoU {val['mIoU']:.4f} BF1 {val['BF1']:.4f} "
+              f"Q {val['Q']:.4f} ({row['sec']:.0f}s){mark}")
         (RESULTS / f"train_{args.name}.json").write_text(json.dumps({"args": vars(args), "history": history}, indent=1))
-    print(f"best val Q {best_q:.4f} -> {CHECKPOINTS / (args.name + '.pt')}")
+    log(f"best val Q {best_q:.4f} -> {CHECKPOINTS / (args.name + '.pt')}")
 
 
 if __name__ == "__main__":
